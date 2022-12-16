@@ -1,11 +1,24 @@
 from os import path
 from json import load
+from collections import Counter, defaultdict
 
 from Bio.Seq import Seq
 from Bio.SeqRecord import SeqRecord
 from Bio import Align
+import re
+from typing import NamedTuple
 
-# Fix AA compatibility
+from src.data import lib_frame_dict
+# from data import lib_frame_dict
+
+class Result(NamedTuple):
+    seq_id: str
+    rfs: list
+    lib: str
+    quality: tuple
+    frame_muts: list
+    stop_muts: list
+    seq_aa: str
 
 
 class Binder:
@@ -16,7 +29,7 @@ class Binder:
             self.mm_lmt = 7
         elif self.mode == 'aa':
             self.mm_lmt = 1
-        self.hq_lmt = 40
+        self.hq_lmt = 40  #
 
         if isinstance(seq_rec._seq, str):
             seq_rec._seq = Seq(seq_rec._seq)
@@ -35,17 +48,18 @@ class Binder:
         
         # Sequence recognized and extracted
         if seq_extract is not None:  
-            self.seq = seq_extract._seq
+            self.seqs = seq_extract._seq
             self.phred = seq_extract._per_letter_annotations.get('phred_quality', [])         
         else:
-            self.seq = Seq('-')
+            self.seqs = Seq('-')
             self.phred = []
 
         self.rfs = self._extract_rfs()
-        self.quality = self._get_quality_results()
+        self.quality = self._get_quality()
+        # self.iso_point = self._get_pI()
 
     @classmethod
-    def seq(cls, seq: str):
+    def seqs(cls, seq: str):
         return cls(SeqRecord(seq))
 
     def _select_mode(self, seq_rec: SeqRecord) -> str:
@@ -67,7 +81,7 @@ class Binder:
             raise ValueError()
 
     def _load_rfs(self) -> dict:
-        # TODO fix !!!
+
         def _translate_to_aa(rf_dict):
             for rf, params in rf_dict.items():
                 for key, value in params.items():
@@ -110,6 +124,7 @@ class Binder:
             his_tag = his_tag.translate()
             myc_tag = myc_tag.translate()
 
+        # Get positions of start and end regions
         pelB_i = self._get_positions(pelB, seq_rec._seq)[1]
         his_tag_i = self._get_positions(his_tag, seq_rec._seq)[0]
         myc_tag_i = self._get_positions(myc_tag, seq_rec._seq)[0]
@@ -132,7 +147,7 @@ class Binder:
     def _get_positions(self, target, seq = None) -> tuple:
         
         if seq is None:
-            seq = self.seq
+            seq = self.seqs
 
         aligner = Align.PairwiseAligner()
         # aligner.substitution_matrix = substitution_matrices.load('BLOSUM62')
@@ -149,18 +164,6 @@ class Binder:
 
         alignments = aligner.align(seq, target)
         target_alignment = str(alignments[0]).split()[1]
-        
-        # mm_condition = target_alignment.count('.') <= self.mm_lmt
-        # len_condition = len(target_alignment.strip('-')) == len(target)
-
-        # if len_condition and mm_condition:
-        #     try:
-        #         target_i = target_alignment.replace('.', '|').index('|')
-        #         print(alignments.alignment.aligned, target_i)
-        #         return target_i
-        #     except ValueError:
-        #         return -1
-        # return -1
 
         try:
             alignments = aligner.align(str(seq), target)
@@ -169,6 +172,9 @@ class Binder:
 
             mm_condition = target_alignment.count('.') <= self.mm_lmt
             len_condition = len(range(*aligned_i)) == len(target)
+
+            # print(target_alignment)
+            # print(mm_condition, len_condition)
 
             if len_condition and mm_condition:
                 return aligned_i
@@ -183,7 +189,7 @@ class Binder:
         self.lib = self._lib_recognition()
         self.rf_dict = self._load_rfs()
 
-        if self.seq is not None:
+        if self.seqs is not None:
 
             # TODO load exact frame
 
@@ -193,7 +199,7 @@ class Binder:
             # Iterate over randomized fragments
             for rf_data in self.rf_dict.values():
                 rf = RF(rf_data, self.mode)
-                extract_seq, *pos = rf.extract(self.seq)
+                extract_seq, *pos = rf.extract(self.seqs)
 
                 if self.mode == 'nt':
                     extract_seq = extract_seq.translate()
@@ -208,10 +214,6 @@ class Binder:
             
         else:
             return [Seq('-')] * len(self.rf_dict.values())
-
-    # def translate_rfs(self):
-    #     if self.mode == 'nt':
-    #         self.rfs = [rf.translate() for rf in self.rfs]
 
     # TODO refactor
     def _lib_recognition(self) -> str:
@@ -314,7 +316,7 @@ class Binder:
                             {
                                 'EIVL': ['AI_VH3-23_Vk3-20',
                                         'AI_VH1-69_Vk3-20'],
-                                'DIQM': ['AI_VH1-69_Vk1-39'
+                                'DIQM': ['AI_VH1-69_Vk1-39',
                                          'AI_VH3-23_Vk1-39',
                                          'SH_VH3-23_Vk1-39'],
                                 'TEIV': ['PureLibra'],
@@ -329,7 +331,7 @@ class Binder:
                                 'SLSPGERATL': ['AI_VH3-23_Vk3-20',
                                                'AI_VH1-69_Vk3-20',
                                                'PureLibra'],
-                                'ASVGDRVTIT': ['AI_VH1-69_Vk1-39'
+                                'ASVGDRVTIT': ['AI_VH1-69_Vk1-39',
                                                'AI_VH3-23_Vk1-39',
                                                'SH_VH3-23_Vk1-39'],
                             },
@@ -341,9 +343,9 @@ class Binder:
                         'patterns':
                             {
                                 'QAPR': ['AI_VH3-23_Vk3-20',
-                                        'AI_VH1-69_Vk3-20',
-                                        'PureLibra'],
-                                'KAPK': ['AI_VH1-69_Vk1-39'
+                                         'AI_VH1-69_Vk3-20',
+                                         'PureLibra'],
+                                'KAPK': ['AI_VH1-69_Vk1-39',
                                          'AI_VH3-23_Vk1-39',
                                          'SH_VH3-23_Vk1-39'],
                             },
@@ -351,20 +353,19 @@ class Binder:
                 ],
             }
         
-
         lib_score = {
                 'SH_VH3-23_Vk1-39': 0,
                 'AI_VH3-23_Vk3-20': 0,
                 'AI_VH3-23_Vk1-39': 0,
                 'AI_VH1-69_Vk3-20': 0,
                 'AI_VH1-69_Vk1-39': 0,
-                'PureLibra': 0
+                'PureLibra': 0,
         }
 
         for elem in lib_patterns[self.mode]:
             try:
                 pos = self._get_positions(elem['anchor'])[1]
-                frag = self.seq[pos+elem['i_start']:pos+elem['i_stop']]
+                frag = self.seqs[pos+elem['i_start']:pos+elem['i_stop']]
                 rec_lib = elem['patterns'].get(frag)
                 if rec_lib:
                     for match in rec_lib:
@@ -377,19 +378,94 @@ class Binder:
                             reverse=True)
         top_lib, second_lib, *rest = lib_sorted
 
-
         if lib_score[top_lib] > lib_score[second_lib]:
             return top_lib
         else:
-            return 'default'
+            return 'Not recognized'
 
-    def _get_quality_results(self) -> tuple:
+    def _get_quality(self) -> tuple:
         if self.phred:
             phred_hq = round(sum(x > self.hq_lmt for x in self.phred) / len(self.phred), 3)
             phred_min = min(self.phred)
-            phred_min_i = self.phred.index(phred_min)
+            phred_min_i = self.phred.index(phred_min) + 1
             return (phred_hq, phred_min, f'({phred_min_i})')
         return ()
+
+    def analyze_binder(self) -> tuple[Result, tuple]:
+
+        def _detect_mutations() -> list:
+            if self.lib != 'Not recognized':
+                mutations = []
+                frames = lib_frame_dict[self.lib]
+                
+                if self.mode == 'aa':
+                    frames = list(map(lambda x: str(Seq(x).translate()), frames))
+                
+                for i, frame in enumerate(frames, 1):
+                    mutations.append(i if frame not in self.seqs else '')
+
+                return mutations
+            return ['-'] * 8
+
+
+        def _count_stop_codons() -> list:
+            if self.mode == 'nt':
+                codons = Counter([str(self.seqs[i:i+3])
+                                for i in range(0, len(self.seqs), 3)])
+                amber = codons['TAG']
+                ochre = codons['TAA']
+                opal = codons['TGA']
+                return [n if n else '' for n in [amber, ochre, opal]]
+            return ['-', '-', '-']
+
+        # Sequence recognized
+        if self.seqs is not None:
+
+            # TODO move to class
+            # Library detection and mutation search
+            frame_muts = _detect_mutations()
+
+            # TODO move to class
+            if self.mode == 'nt':
+                seq_aa = str(self.seqs.translate())
+            else:
+                seq_aa = str(self.seqs)
+
+            # Stop codon search
+            stop_muts = _count_stop_codons()
+
+            # Gather results
+            result = Result(self.id,
+                            self.rfs,
+                            self.lib,
+                            self.quality,
+                            frame_muts,
+                            stop_muts,
+                            seq_aa)
+
+            # Create unique binder key
+            ub_key = self.get_ub_key()
+
+        # No sequence recognized
+        else:
+            result = Result(
+                self.id,  # Sequence ID
+                [Seq('-')] * 6,   # RFs
+                'Not recognized',  # Library
+                ('-', '-', '-'),  # Phred HQ, score, and position
+                ['-'] * 8,   # Frame mutations
+                [''] * 3,  # Stop mutations
+                '-',  # Aminoacid sequence
+            )
+            ub_key = ()
+
+        return (result, ub_key)
+
+    def get_ub_key(self)-> tuple[str, str]:
+        if Seq('-') not in self.rfs:
+            return ('_'.join(map(str, self.rfs)), self.lib)
+        else:
+            return ()
 
     def check_unique(self, file) -> bool:
         # unique = True/False
@@ -404,15 +480,15 @@ class RF:
     
         self.mode = mode
         self.start = params['start']
-        self.st_dis = len(self.start) + params['start_dis']
+        self.st_dis = params['start_dis']
         self.end = params['end']
         self.end_dis = params['end_dis']
-        self.limit = params['limit']
+        self.lmt = params['limit']
         self.end_pos = -1
         if mode == 'nt':
             self.mm_lmt = 7
         elif mode == 'aa':
-            self.mm_lmt = 1
+            self.mm_lmt = 3
 
     def _get_positions(self, target, seq) -> tuple:
         aligner = Align.PairwiseAligner()
@@ -425,20 +501,9 @@ class RF:
         alignments = aligner.align(str(seq), target)
         target_alignment = str(alignments[0]).split()
 
-        # mm_condition = target_alignment.count('.') <= self.mm_lmt
-        # len_condition = len(target_alignment[1].strip('-')) == len(target)
-
-        # if len_condition and mm_condition:
-        #     try:
-        #         target_i = target_alignment[1].replace('.', '|').index('|')
-        #         return target_i
-        #     except ValueError:
-        #         return -1
-        # return -1
-
         try:
             alignments = aligner.align(str(seq), target)
-            target_alignment = str(alignments[0]).split()
+            target_alignment = str(alignments[0]).split()[1]
             aligned_i = alignments.alignment.aligned[0][0]
 
             mm_condition = target_alignment.count('.') <= self.mm_lmt
@@ -455,27 +520,138 @@ class RF:
 
     # Extract RF sequence
     def extract(self, seq) -> tuple:
-        self.st_pos = self._get_positions(self.start, seq)[0]
+        
+        def _check_positions() -> bool:
+            conditions = [
+                self.st_pos >= 0,
+                self.end_pos > self.st_pos,
+                self.st_pos + self.st_dis < self.end_pos - self.end_dis,
+                self.lmt >= len(seq[self.rf_start:self.rf_end])
+            ]
+            # print(conditions)
+            return all(conditions)
+        
+        self.st_pos = self._get_positions(self.start, seq)[1]
         self.end_pos = self._get_positions(self.end, seq)[0]
+        
+        self.rf_start = self.st_pos + self.st_dis
+        self.rf_end = self.end_pos - self.end_dis
 
         # All positions found -> adjust distance
-        if self._check_positions():
-            self.rf_start = self.st_pos + self.st_dis
-            self.rf_end = self.end_pos + self.end_dis
+        if _check_positions():
             seq = Seq(seq[self.rf_start:self.rf_end])
-
-            if self.limit < len(seq):
-                seq = Seq('-')
-
             return (seq, self.rf_start, self.rf_end)
 
         else:
             return (Seq('-'), 0, 0)
 
-    def _check_positions(self) -> bool:
-        conditions = [
-            self.st_pos >= 0,
-            self.end_pos > self.st_pos,
-            self.st_pos + self.st_dis < self.end_pos + self.end_dis,
+
+class SeqLiab:
+    
+    def __init__(self, rfs: list) -> None:
+        
+        seq_liab_db = [
+            {'name': 'Glycosylation',
+             'regex': 'N[^P][ST][^P]',
+             'score': 3,
+            },
+            {'name': 'Isomerization',
+             'regex': 'D[GSTDH]',
+             'score': 3,
+            },
+            {'name': 'Fragmentation',
+             'regex': 'D[PQ]',
+             'score': 3,
+            },
+            {'name': 'Extra Cysteine',
+             'regex': 'C',
+             'score': 3,
+            },
+            {'name': 'Deamidation CDR (High)',
+             'regex': 'N[GSAT]',
+             'score': 2,
+            },
+            {'name': 'Hydrolysis',
+             'regex': 'NP',
+             'score': 2,
+            },
+            {'name': 'Cleavage',
+             'regex': 'TS',
+             'score': 2,
+            },
+            {'name': 'Deamidation CDR (Med)',
+             'regex': 'NH',
+             'score': 1,
+            },
+            {'name': 'Integrin binding aVb3',
+             'regex': 'RGD|RYD|KGD|NGR',
+             'score': 1,
+            },
+            {'name': 'Integrin binding a4b1',
+             'regex': 'LDV',
+             'score': 1,
+            },
+            {'name': 'Integrin binding a2b1',
+             'regex': 'DGE',
+             'score': 1,
+            },
+            {'name': 'CD11c/CD18 binding',
+             'regex': 'GPR',
+             'score': 1,
+            },
+            {'name': 'Hydrophobicity',
+             'regex': '[WF][WF]',
+             'score': 1,
+            },
+            {'name': 'Oxidation',
+             'regex': 'M',
+             'score': 0,
+            },
+            {'name': 'Deamidation CDR (Low)',
+             'regex': '[STK]N',
+             'score': 0,
+            },
         ]
-        return all(conditions)
+        
+        if isinstance(rfs, str):
+            rfs = rfs.split('_')
+
+        self.sl_score = 0
+        self.sl_count = defaultdict(int)
+        self.sl_matches = defaultdict(list)
+
+        for sliab in seq_liab_db:
+            sl_pattern = re.compile(sliab['regex'])
+            for i, rf in enumerate(rfs, 1):
+                sl_matches = sl_pattern.findall(rf)
+                if sl_matches:
+                    self.sl_score += sliab['score'] * len(sl_matches)
+                    self.sl_count[sliab['name']] += len(sl_matches)
+                    for match in sl_matches:
+                        self.sl_matches[sliab['name']] += [(i, match)]
+
+        # TODO return (i, sl_match) for every match
+
+    def get_score(self):
+        return self.sl_score
+
+    def get_summary(self):
+        return [(liab, self.sl_count[liab], self.sl_matches[liab]) for liab in self.sl_count]
+
+
+if __name__ == '__main__':
+    # rfs = ['GFTFSSY',
+    #        'ISGSGGST',
+    #        'RLMVNLCLFAL',
+    #        'QSVSSSY',
+    #        'GAS',
+    #        'VWVWQSYWT']
+
+    seq = "CGGGTGATACACGGCATGTCTAGGCAGAGGAGCACCGGCATGAAATACCTATTGCCTACGGCAGCCGCTGGATTGTTATTACTCGCGGCCCAGCCGGCCATGGCCGAGGTGCAGCTGTTGGAGTCTGGGGGAGGCTTGGTACAGCCTGGGGGGTCCCTGAGACTCTCCTGTGCAGCCTCTGGATTCACCTTTAGCAGCTATGCCATGAGCTGGGTCCGCCAGGCTCCAGGGAAGGGGCTGGAGTGGGTGTCAGCTATTAGTGGTAGTGATGGTAGCACATACTACGCAGACTCCGTGAAGGGCCGGTTCACCATCTCCAGAGACAATTCCAAGAACACGCTGTATCTGCAAATGAACAGCCTGAGAGCCGAGGACACGGCCGTATATTACTGTGCGAGGAAGTCCTAGTCCAACAGCATGGGGCTGTTCGACTATTGGGGCCAGGGAACCCTGGTCACCGTGTCCTCAGGTGGAGGCGGTTCAGGCGGAGGTGGCAGCGGCGGTGGCGGGTCGACGGAAATTGTGTTGACGCAGTCTCCAGGCACCCTGTCTTTGTCTCCAGGGGAAAGAGCCACCCTCTCCTGCAGGGGCAGTCAGAGTGTTAGCAGCAGCTACTTAGCCTGGTACCAGCAGAAACCTGGCCAGGCTCCCAGGCTCCTCATCTATGGTGCATCCAGCAGGGCCACTGGCATCCCAGACAGGTTCAGTGGCAGTGGGTCTGGGACAGACTTCACTCTCACCATCAGCAGACTGGAGCCTGAAGATTTTGCAGTGTATTACTGTCTGTTCTCGTACCTGTAGTTGGAGACCTTTGGCCAGGGGACCAAGCTGGAGATCAAACGAGCGGCCGCAGGGGCCGCAGAACAAAAACTCATCTCAGAAGAGGATCTGGGAGACGCGGGTGGCGGCGGTTCTACTGTTGAAAGTTGTTTAGCAAAACCTCATACAGAAAATTCATTTACTAACGTCTGGAAAGACGACAAAACTTTAGATCGTTACGCTAACTATGAGGGCTGTCTGTGGAATGCTACAGGCGTTGTGGTTTGTACTGGTGACGAAACTCAGTGTTACGGTACATGGGTTCCTATTGGGCTTGCTATCCCTGAAAATGAAGGTGGTGGCTCTGAAGGTGGCGGTTCTGAGGGTGGCGGTTCTGAAGGTGGCGGTACTAAACCTCCTGAGTACGGGGAATCACCTATTCCGGGCTATACTTATTCAACCCTTTCAACGGCCTTATCGCCTGGAACTGAGCAAAACCCGCTAATCTAATCTTTCTTTGGGA"
+    binder = Binder.seqs(seq)
+    
+    res, key = binder.analyze_binder()
+    
+    # print(binder.sl_summary)
+    
+

@@ -1,7 +1,7 @@
 {
-    "default": {
+    "Not recognized": {
         "rf_1": {
-            "start": "GAGGTGCAGCTGTTGGAGTCTGGG",
+            "start": "GTGCAGCTGGTGCAGTCTGGG",
             "start_dis": 51,
             "end": "TGGGTCCGCCAGGCT",
             "end_dis": 0,
@@ -10,8 +10,8 @@
         "rf_2": {
             "start": "GGGCTGGAGTGGGTC",
             "start_dis": 0,
-            "end": "GACTCCGTGAAGGGCCGGTTCACCATC",
-            "end_dis": 0,
+            "end": "AAGGGCCGGTTCACCATC",
+            "end_dis": 9,
             "limit": 45
         },
         "rf_3": {
@@ -22,8 +22,8 @@
             "limit": 75
         },
         "rf_4": {
-            "start": "GGATCTGGAGGAGGTGGCTCG",
-            "start_dis": 69,
+            "start": "GGTGGCGGTGGATCGGGCGGTGGTGGATCTGGAGGAGGTGGCTCG",
+            "start_dis": 72,
             "end": "TGGTATCAGCAGAAACCAGGG",
             "end_dis": 0,
             "limit": 45
