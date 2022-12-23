@@ -2,9 +2,10 @@ from collections import defaultdict, Counter
 from os import getcwd, system, listdir, makedirs
 from os.path import isfile, join, dirname, abspath
 from warnings import filterwarnings
+from time import perf_counter
 
 from Bio import SeqIO, BiopythonWarning
-from openpyxl import load_workbook
+from openpyxl import Workbook, load_workbook
 from openpyxl.comments import Comment
 from typing import NamedTuple
 
@@ -39,6 +40,16 @@ def print_frame(func):
     return wrapper
 
 
+def measure_time(func):
+    def wrapper(*args, **kwargs):
+        start_time = perf_counter()
+        result = func(*args, **kwargs)
+        exec_time = perf_counter() - start_time
+        print(f'Analyzed {len(result)} records in {exec_time:.3f} s\n')
+        return result
+    return wrapper
+
+
 @print_frame
 def main():
 
@@ -50,15 +61,14 @@ def main():
 
     # Load Excel template
     wb = load_template()
-    ws_rfs = wb["RF analysis"]
-    ws_ubs = wb["Unique binders"]
 
     # Analyze fasta files
-    results, unique_binders = parse_files(files)
+    results = parse_files(files)
+    unique_binders = get_unique_binders(results)
 
     # Write results to template
-    write_results(ws_rfs, results)
-    write_ubs(ws_ubs, unique_binders)
+    write_results(wb, results)
+    write_ubs(wb, unique_binders)
 
     # Create folder
     file_name = input("Save as: ")
@@ -66,42 +76,41 @@ def main():
     file_path = join(file_dir, file_name + ".xlsx")
     makedirs(f'{file_dir}', exist_ok=True)
 
+    # Save results
+    save_workbook(wb, file_path)
+
     # Sort scf files
     sort_scf_files(unique_binders, mypath, file_dir)
-
-    # Save results
-    wb.save(filename=file_path)
 
     # Move fasta
     move_files(files, file_dir)
 
 
-def get_files(mypath: str, formats: list, subdir: str = None) -> list:
+def get_files(mypath: str, format: list, subdir: str = None, abspath: bool = True) -> list:
     if subdir is not None:
         mypath = join(mypath, subdir)
     try:
-        files = [file_path for f in listdir(mypath)
-                 if isfile(file_path := join(mypath, f))
-                 and f.rpartition('.')[-1] in formats]
+        files = [file_path if abspath else f for f in listdir(mypath)
+                if isfile(file_path := join(mypath, f))
+                and f.rpartition('.')[-1].lower() in format]
         return files
     except FileNotFoundError:
         print(f'---< {subdir} folder not found >---'.center(80))
         return []
 
 
-def sort_scf_files(ub_list: list, path: str, file_dir: str) -> None:
-    scf_files = get_files(path, ['scf'], 'scf_files')
-    n = len(ub_list)
+def sort_scf_files(unique_binders: list, path: str, file_dir: str) -> None:
+    scf_files = get_files(path, 'scf', 'scf_files', False)
     if scf_files:
-        for i in range(n):
-            makedirs(f'{file_dir}\\Variant {i+1}', exist_ok=True)
-            for seq_id in ub_list[i][1][1]:
+        for i, binder in enumerate(unique_binders, 1):
+            makedirs(f'{file_dir}\\Variant {i}', exist_ok=True)
+            for seq_id, seq_quality in binder.recs:
                 if '_(reversed)' in seq_id:
                     seq_id = seq_id.replace('_(reversed)', '')
-                if '.scf' not in seq_id:
-                    seq_id = seq_id + '.scf'
+                if '.SCF' not in seq_id:
+                    seq_id = seq_id + '.SCF'
                 if seq_id in scf_files:
-                    system(f'move ".\\scf_files\\{seq_id}" "{file_dir}\\Variant {i+1}\\" >nul')
+                    system(f'move ".\\scf_files\\{seq_id}" "{file_dir}\\Variant {i}\\" >nul')
                     scf_files.remove(seq_id)
         for file in scf_files:
             makedirs(f'{file_dir}\\Not classified', exist_ok=True)
@@ -118,28 +127,36 @@ def load_template():
     return load_workbook(template_path)
 
 
-# TODO merge into universal method for all formats
-# TODO split into seperate methods for res and ubs
-def parse_files(files):
-
+@measure_time
+def parse_files(files) -> list:
     results = []
-    unique_binders = defaultdict(list)
-
     for file in files:
         ext = file.rpartition('.')[-1]
         with open(file, 'r') as handle:
             for record in SeqIO.parse(handle, ext):
                 binder = Binder(record)
-                result, ub_key = binder.analyze_binder()
+                result = binder.analyze_binder()
                 results.append(result)
+    # Sort: RFs: ascending | quality (HQ): descending
+    results.sort(key=lambda x: (
+        list(map(str, x.rfs)),
+        (-x.quality[0] if x.quality else 0))
+        )
+    return results
 
-                if ub_key:
-                    unique_binders[ub_key] += [(result.seq_id, result.quality)]
 
-    return results, unique_binders
+def get_unique_binders(results: list) -> list:
+
+    unique_binders = defaultdict(list)
+
+    for result in results:
+        if '-' not in result.rfs:
+            ub_key = ('_'.join(map(str, result.rfs)), result.lib)
+            unique_binders[ub_key] += [(result.seq_id, result.quality)]
+    return sort_unique_binders(unique_binders)
 
 
-def get_pI(rfs):
+def get_pI(rfs) -> float:
 
     # Calculates charge of aa at given pH based on pKa
     def charge(ph, pka):
@@ -192,11 +209,9 @@ def get_pI(rfs):
     return round(pH, 2)
 
 
-def write_results(ws_rfs, results) -> None:
+def write_results(wb: Workbook, results: list) -> None:
     # Sort based on RFs > library > mutations > STOP mutations > AA sequence
-    results.sort(key=lambda x: (
-        list(map(str, x.rfs)),
-        (1-x.quality[0] if x.quality else 0)))
+    ws_rfs = wb["RF analysis"]
 
     # TODO refactor
     start_row = 4
@@ -221,56 +236,22 @@ def write_results(ws_rfs, results) -> None:
         # Add full AA sequence
         ws_rfs.cell(column=25, row=i).value = str(result.seq_aa)
 
+def sort_unique_binders(unique_binders: defaultdict) -> list:
+    return sorted(
+        [UniqueBinder(ub_key,  # rfs
+                      ub_lib,  # lib
+                      len(seq_records),  # num
+                      seq_records)  # recs: [(seq_id, seq_quality), ...]
+        for (ub_key, ub_lib), seq_records in unique_binders.items()],
+        key=lambda x: x.num,
+        reverse=True)
 
-# # TODO refactor for clarity - indexes !!!
-# def write_ubs(ws_ubs, unique_binders) -> None:
-#     # Change dict into list and add number of IDs per RF
-#     # ub: ((rfs_merged, lib), [(res_id, res_quality), ...])
-#     unique_binders = [UniqueBinder(*ub_key, len(seq_records), seq_records)
-#                       for ub_key, seq_records in unique_binders.items()]
 
-#     # Sort descending by number of IDs sharing RF
-#     unique_binders.sort(key=lambda x: x.num, reverse=True)
-
-#     # Sort IDs by quality
-#     for binder in unique_binders:
-#         binder.recs.sort(key=lambda x: x[1], reverse=True)
-
-#     # Write RFs of given variant and IDs sharing it
-#     for i, ub in enumerate(unique_binders, start=3):
-#         ws_ubs.cell(column=i, row=2).value = ub.lib  # Library
-
-#         rfs_split = ub.rfs.split("_")  # List of RFs
-#         for j in range(6):
-#             ws_ubs.cell(column=i, row=3+j).value = rfs_split[j]
-
-#         ws_ubs.cell(column=i, row=9).value = ub.count  # Number of seqs
-
-#         sliab_dict = {
-#             'Glycosylation': 12,
-#             'Isomerization': 13,
-#             'Cleavage': 14,
-#             'Extra Cysteine': 15,
-#             'Deamidation CDR (High)': 16,
-#             'Hydrolysis': 17,
-#             'Cleavage': 18,
-#             'Deamidation CDR (Low)': 19,
-#         }
-
-#         sliab = SeqLiab(ub.rfs)
-
-#         # Seq Liabilities
-#         ws_ubs.cell(column=i, row=11).value = sliab.get_score()
-
-#         for liab, liab_count in sliab.get_summary():
-#             ws_ubs.cell(column=i, row=sliab_dict[liab]).value = liab_count
-
-#         for j, rec in enumerate(ub.recs): # Seq IDs
-#             ws_ubs.cell(column=i, row=20+j).value = rec[0]
-
-def write_ubs(ws_ubs, unique_binders) -> None:
+def write_ubs(wb: Workbook, unique_binders: list) -> None:
     # Change dict into list and add number of IDs per RF
     # ub: ((rfs_merged, lib), [(res_id, res_quality), ...])
+
+    ws_ubs = wb["Unique binders"]
 
     sliab_cols = {
             'Glycosylation': 13,
@@ -291,19 +272,13 @@ def write_ubs(ws_ubs, unique_binders) -> None:
         }
 
     rf_dict = {
-        1: 'RFH1',
-        2: 'RFH2',
-        3: 'RFH3',
-        4: 'RFL1',
-        5: 'RFL2',
-        6: 'RFL3',
+                1: 'RFH1',
+                2: 'RFH2',
+                3: 'RFH3',
+                4: 'RFL1',
+                5: 'RFL2',
+                6: 'RFL3',
                }
-
-    unique_binders = [UniqueBinder(*ub_key, len(seq_records), seq_records)
-                      for ub_key, seq_records in unique_binders.items()]
-
-    # Sort descending by number of IDs sharing RF
-    unique_binders.sort(key=lambda x: x.num, reverse=True)
 
     # Sort IDs by quality
     for binder in unique_binders:
@@ -312,38 +287,62 @@ def write_ubs(ws_ubs, unique_binders) -> None:
     # Write RFs of given variant and IDs sharing it
     start_row = 5
     for i, ub in enumerate(unique_binders, start_row):
-        
-        # Library
+
+        # Write library
         ws_ubs.cell(column=2, row=i).value = ub.lib
 
-        rfs_split = ub.rfs.split("_")  # List of RFs
-        for j in range(6):
-            ws_ubs.cell(column=3+j, row=i).value = rfs_split[j]
+        # Write randomized fragments
+        rfs_split = ub.rfs.split("_")
+        for j, rf in enumerate(rfs_split):
+            ws_ubs.cell(column=3+j, row=i).value = rf
 
-        ws_ubs.cell(column=9, row=i).value = ub.num  # Number of seqs
+        # Write umber of seqs
+        ws_ubs.cell(column=9, row=i).value = ub.num
+
+        # Write pH
         ws_ubs.cell(column=11, row=i).value = get_pI(ub.rfs)
 
+        # Analyze sequence liabilities
         sliab = SeqLiab(ub.rfs)
 
-        # Seq Liabilities
+        # Write liability score
         ws_ubs.cell(column=12, row=i).value = sliab.get_score()
 
+        # Write sequence liabilities
         for liab, liab_count, liab_list in sliab.get_summary():
-            ws_ubs.cell(column=sliab_cols[liab], row=i).value = liab_count
             text = '\n'.join(map(lambda x: f'{rf_dict.get(x[0])}: {x[1]}', liab_list))
-            comment = Comment(text=text, author='')
-            comment.width = 85
-            comment.height = 17.5 * len(liab_list)
+            comment = Comment(text=text,
+                              author='',
+                              height=17.5 * len(liab_list),
+                              width=85)
+            ws_ubs.cell(column=sliab_cols[liab], row=i).value = liab_count
             ws_ubs.cell(column=sliab_cols[liab], row=i).comment = comment
 
+        # Write record names
         for j, rec in enumerate(ub.recs):  # Seq IDs
             ws_ubs.cell(column=28+j, row=i).value = rec[0]
 
 
-def move_files(files, target_dir):
+def save_workbook(wb: Workbook, file_path: str) -> None:
+    while True:
+        try:
+            wb.save(filename=file_path)
+            break
+        except PermissionError:
+            print('---< Unable to save: file in use - close it and try again >---'.center(80))
+            system('pause')
+
+
+def move_files(files: list, target_dir: str) -> None:
     for file in files:
         system(f'move "{file}" "{target_dir}" >nul')
 
 
 if __name__ == "__main__":
     main()
+    
+    # seq = "ATGAAATACCTATTGCCTACGGCAGCCGCTGGATTGTTATTACTCGCGGCCCAGCCGGCCATGGCCGAGGTGCAGCTGTTGGAGTCTGGGGGAGGCTTGGTACAGCCTGGGGGGTCCCTGAGACTCTCCTGTGCAGCCTCTTAGTTCACCTTTAGCAGCTATGCCATGAGCTGGGTCCGCCAGGCTCCAGGGAAGGGGCTGGAGTGGGTGTCAGCTATTAGTGGTAGTGGTGGTAGCACATACTACGCAGACTCCGTGAAGGGCCGGTTCACCATCTCCAGAGACAATTCCAAGAACACGCTGTATCTGCAAATGAACAGCCTGAGAGCCGAGGACACGGCCGTATATTACTGTGCGAAAGAAGTCGGATATTGTAGTAGTACCAGCTTTGACCCCTGGGGCCAGGGAACCCTGGTCACCGTGTCCTCAGGTGGAGGCGGTTCAGGCGGAGGTGGCAGCGGCGGTGGCGGGTCGACGGAAATTGTGTTGACGCAGTCTCCAGGCACCCTGTCTTTGTCTCCAGGGGAAAGAGCCACCCTCTCCTGCAGGGCCAGTCAGAGTGTTAGCAGCAGCTACTTAGCCTGGTACCAGCAGAAACCTGGCCAGGCTCCCAGGCTCCTCATCTATGGTGCATCCAGCAGGGCCACTGGCATCCCAGACAGGTTCAGTGGCAGTGGGTCTGGGACAGACTTCACTCTCACCATCAGCAGACTGGAGCCTGAAGATTTTGCAGTGTATTACTGTCAGCAGTATGGTAGCTCACGGGGGTACTTTGGCCAGGGGACCAAGCTGGAGATCAAACGAGCGGCCGCAGGGGCCGCAGAACAAAAACTCATCTCAGAAGAGGATCTGGGAGACGCG"
+    # binder = Binder.seq(seq)
+    # res = measure_time(binder.analyze_binder)()
+    # print(binder.rfs)
+    

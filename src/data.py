@@ -1,3 +1,4 @@
+from Bio.Data.CodonTable import CodonTable, standard_dna_table
 from typing import NamedTuple
 
 
@@ -12,8 +13,80 @@ class Frames(NamedTuple):
     frame_l4: str
 
 
+supE_codon_table = CodonTable(
+    forward_table={**standard_dna_table.forward_table, 'TAG': 'Q'},
+    back_table=standard_dna_table.back_table,
+    start_codons=standard_dna_table.start_codons,
+    stop_codons=['TAA', 'TGA'],
+)
+
+
+seq_liab_db = [
+    {'name': 'Glycosylation',
+     'regex': 'N[^P][ST][^P]',
+     'score': 3,
+    },
+    {'name': 'Isomerization',
+     'regex': 'D[GSTDH]',
+     'score': 3,
+    },
+    {'name': 'Fragmentation',
+     'regex': 'D[PQ]',
+     'score': 3,
+    },
+    {'name': 'Extra Cysteine',
+     'regex': 'C',
+     'score': 3,
+    },
+    {'name': 'Deamidation CDR (High)',
+     'regex': 'N[GSAT]',
+     'score': 2,
+    },
+    {'name': 'Hydrolysis',
+     'regex': 'NP',
+     'score': 2,
+    },
+    {'name': 'Cleavage',
+     'regex': 'TS',
+     'score': 2,
+    },
+    {'name': 'Deamidation CDR (Med)',
+     'regex': 'NH',
+     'score': 1,
+    },
+    {'name': 'Integrin binding aVb3',
+     'regex': 'RGD|RYD|KGD|NGR',
+     'score': 1,
+    },
+    {'name': 'Integrin binding a4b1',
+     'regex': 'LDV',
+     'score': 1,
+    },
+    {'name': 'Integrin binding a2b1',
+     'regex': 'DGE',
+     'score': 1,
+    },
+    {'name': 'CD11c/CD18 binding',
+     'regex': 'GPR',
+     'score': 1,
+    },
+    {'name': 'Hydrophobicity',
+     'regex': '[WF][WF]',
+     'score': 1,
+    },
+    {'name': 'Oxidation',
+     'regex': 'M',
+     'score': 0,
+    },
+    {'name': 'Deamidation CDR (Low)',
+     'regex': '[STK]N',
+     'score': 0,
+    },
+]
+
+
 # Dict of FRs of all supported libraries
-lib_frame_dict = {
+lib_frames = {
     'SH_VH3-23_Vk1-39':
         Frames(
             'GAGGTGCAGCTGTTGGAGTCTGGGGGAGGCTTGGTACAGCCTGGGGGGTCCCTGAGACTCTCCTGTGCAGCCTCTGGA',  # FRH1

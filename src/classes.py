@@ -4,12 +4,14 @@ from collections import Counter, defaultdict
 
 from Bio.Seq import Seq
 from Bio.SeqRecord import SeqRecord
+
 from Bio import Align
 import re
 from typing import NamedTuple
 
-from src.data import lib_frame_dict
-# from data import lib_frame_dict
+from src.data import lib_frames, supE_codon_table, seq_liab_db
+# from data import lib_frames, supE_codon_table
+
 
 class Result(NamedTuple):
     seq_id: str
@@ -48,10 +50,10 @@ class Binder:
         
         # Sequence recognized and extracted
         if seq_extract is not None:  
-            self.seqs = seq_extract._seq
+            self.seq = seq_extract._seq
             self.phred = seq_extract._per_letter_annotations.get('phred_quality', [])         
         else:
-            self.seqs = Seq('-')
+            self.seq = Seq('-')
             self.phred = []
 
         self.rfs = self._extract_rfs()
@@ -59,23 +61,17 @@ class Binder:
         # self.iso_point = self._get_pI()
 
     @classmethod
-    def seqs(cls, seq: str):
+    def seq(cls, seq: str):
         return cls(SeqRecord(seq))
 
     def _select_mode(self, seq_rec: SeqRecord) -> str:
         seq_set = set(seq_rec)
+        nucleotides = set('ATGCU')
+        aminoacids = set('ARNDCQEGHILKMNFPOSUTWYVBZXJ*')
 
-        def _isnucleotide(seq_set) -> bool:
-            nucleotides = set('ATGCU')
-            return seq_set.issubset(nucleotides)
-
-        def _isaminoacid(seq_set) -> bool:
-            aminoacids = set('ARNDCQEGHILKMNFPOSUTWYVBZXJ*')
-            return seq_set.issubset(aminoacids)
-
-        if _isnucleotide(seq_set):
+        if seq_set.issubset(nucleotides):
             return 'nt'
-        elif _isaminoacid(seq_set):
+        elif seq_set.issubset(aminoacids):
             return 'aa'
         else:
             raise ValueError()
@@ -86,9 +82,9 @@ class Binder:
             for rf, params in rf_dict.items():
                 for key, value in params.items():
                     if isinstance(value, str):
-                        rf_dict[rf][key] = str(Seq(value).translate())
+                        rf_dict[rf][key] = str(Seq(value).translate(table=supE_codon_table))
                     elif isinstance(value, int):
-                        rf_dict[rf][key] = int(value / 3)
+                        rf_dict[rf][key] = value // 3
             return rf_dict
         
         file_dir = path.dirname(path.abspath(__file__))
@@ -96,13 +92,12 @@ class Binder:
         file_path = path.join(file_dir, file_name)
         
         with open(file_path, 'r') as file:
-            rf_dict = load(file)
+            rf_dicts = load(file)
 
-        rf_dict = rf_dict.get(self.lib)
+        rf_dict = rf_dicts.get(self.lib)
 
         if self.mode == 'aa':
             return _translate_to_aa(rf_dict)
-        
         return rf_dict
 
     def _extract_seq(self, seq_rec: SeqRecord) -> SeqRecord:
@@ -120,9 +115,9 @@ class Binder:
         myc_tag = Seq('GAACAAAAACTCATCTCAGAAGAGGATCTG')
 
         if self.mode == 'aa':
-            pelB = pelB.translate()
-            his_tag = his_tag.translate()
-            myc_tag = myc_tag.translate()
+            pelB = pelB.translate(table=supE_codon_table)
+            his_tag = his_tag.translate(table=supE_codon_table)
+            myc_tag = myc_tag.translate(table=supE_codon_table)
 
         # Get positions of start and end regions
         pelB_i = self._get_positions(pelB, seq_rec._seq)[1]
@@ -144,10 +139,10 @@ class Binder:
         else:
             return None
 
-    def _get_positions(self, target, seq = None) -> tuple:
+    def _get_positions(self, target, seq=None) -> tuple:
         
         if seq is None:
-            seq = self.seqs
+            seq = self.seq
 
         aligner = Align.PairwiseAligner()
         # aligner.substitution_matrix = substitution_matrices.load('BLOSUM62')
@@ -184,12 +179,12 @@ class Binder:
         except IndexError:
             return (-1, -1)
 
-    # TODO translate cannot be properly used | always auto translate?
+
     def _extract_rfs(self) -> list[Seq]:
         self.lib = self._lib_recognition()
         self.rf_dict = self._load_rfs()
 
-        if self.seqs is not None:
+        if self.seq is not None:
 
             # TODO load exact frame
 
@@ -199,10 +194,10 @@ class Binder:
             # Iterate over randomized fragments
             for rf_data in self.rf_dict.values():
                 rf = RF(rf_data, self.mode)
-                extract_seq, *pos = rf.extract(self.seqs)
+                extract_seq, *pos = rf.extract(self.seq)
 
                 if self.mode == 'nt':
-                    extract_seq = extract_seq.translate()
+                    extract_seq = extract_seq.translate(table=supE_codon_table)
 
                 if pos[0] > last_pos[1]:
                     rf_extracted.append(extract_seq)
@@ -215,173 +210,26 @@ class Binder:
         else:
             return [Seq('-')] * len(self.rf_dict.values())
 
-    # TODO refactor
+
     def _lib_recognition(self) -> str:
 
-        lib_patterns = {
-            'nt':
-                [
-                    {
-                        'anchor': 'GCCCAGCCGGCCATG',
-                        'i_start': 31,
-                        'i_stop': 34,
-                        'patterns':
-                            {
-                            'GCT': ['SH_VH3-23_Vk1-39',
-                                    'PureLibra'],
-                            'GCC': ['AI_VH3-23_Vk3-20',
-                                    'AI_VH3-23_Vk1-39'],
-                            'AGG': ['AI_VH1-69_Vk3-20',
-                                    'AI_VH1-69_Vk1-39'],
-                            },
-                    },
-                    {
-                        'anchor': 'GCCCAGCCGGCCATG',
-                        'i_start': 68,
-                        'i_stop': 72,
-                        'patterns':
-                            {
-                            'TGCA': ['SH_VH3-23_Vk1-39',
-                                     'PureLibra'],
-                            'CGCA': ['AI_VH3-23_Vk3-20',
-                                     'AI_VH3-23_Vk1-39'],
-                            'CAAG': ['AI_VH1-69_Vk3-20',
-                                     'AI_VH1-69_Vk1-39'],
-                            },
-                    },
-                    {
-                        'anchor': 'GGTGGCGGTGGATCGGGCGGTGGTGG',
-                        'i_start': 25,
-                        'i_stop': 29,
-                        'patterns':
-                            {
-                                'GTGT': ['AI_VH3-23_Vk3-20',
-                                         'AI_VH1-69_Vk3-20'],
-                                'CAGA': ['SH_VH3-23_Vk1-39',
-                                         'AI_VH3-23_Vk1-39',
-                                         'AI_VH1-69_Vk1-39'],
-                                'ATTG': ['PureLibra']
-                            },
-                    },
-                    {
-                        'anchor': 'GGTGGCGGTGGATCGGGCGGTGGTGG',
-                        'i_start': 69,
-                        'i_stop': 75,
-                        'patterns':
-                            {
-                                'CCGTGT': ['SH_VH3-23_Vk1-39'],
-                                'AAGAGC': ['AI_VH3-23_Vk3-20',
-                                           'AI_VH1-69_Vk3-20'],
-                                'CAGAGT': ['AI_VH3-23_Vk1-39',
-                                           'AI_VH1-69_Vk1-39'],
-                                'GGAAAG': ['PureLibra']
-                            },
-                    },
-                ],
-            'aa': 
-                [
-                    {
-                        'anchor': 'AAQPAMA',
-                        'i_start': 8,
-                        'i_stop': 13,
-                        'patterns':
-                            {
-                                'AEVKK': ['AI_VH1-69_Vk3-20',
-                                          'AI_VH1-69_Vk1-39'],
-                                'GGLVQ': ['AI_VH3-23_Vk3-20',
-                                          'AI_VH3-23_Vk1-39',
-                                          'SH_VH3-23_Vk1-39',
-                                          'PureLibra'],
-                            },
-                    },
-                    {
-                        'anchor': 'AAQPAMA',
-                        'i_start': 15,
-                        'i_stop': 23,
-                        'patterns':
-                            {
-                                'SSVKVSCK': ['AI_VH1-69_Vk3-20',
-                                             'AI_VH1-69_Vk1-39'],
-                                'GSLRLSCA': ['AI_VH3-23_Vk3-20',
-                                             'AI_VH3-23_Vk1-39',
-                                             'SH_VH3-23_Vk1-39',
-                                             'PureLibra'],
-                            },
-                    },
-                    {
-                        'anchor': 'GGGGSGGGGSGGGGS',
-                        'i_start': 0,
-                        'i_stop': 4,
-                        'patterns':
-                            {
-                                'EIVL': ['AI_VH3-23_Vk3-20',
-                                        'AI_VH1-69_Vk3-20'],
-                                'DIQM': ['AI_VH1-69_Vk1-39',
-                                         'AI_VH3-23_Vk1-39',
-                                         'SH_VH3-23_Vk1-39'],
-                                'TEIV': ['PureLibra'],
-                            },
-                    },
-                    {
-                        'anchor': 'GGGGSGGGGSGGGGS',
-                        'i_start': 12,
-                        'i_stop': 22,
-                        'patterns':
-                            {
-                                'SLSPGERATL': ['AI_VH3-23_Vk3-20',
-                                               'AI_VH1-69_Vk3-20',
-                                               'PureLibra'],
-                                'ASVGDRVTIT': ['AI_VH1-69_Vk1-39',
-                                               'AI_VH3-23_Vk1-39',
-                                               'SH_VH3-23_Vk1-39'],
-                            },
-                    },
-                    {
-                        'anchor': 'WYQQKPG',
-                        'i_start': 0,
-                        'i_stop': 4,
-                        'patterns':
-                            {
-                                'QAPR': ['AI_VH3-23_Vk3-20',
-                                         'AI_VH1-69_Vk3-20',
-                                         'PureLibra'],
-                                'KAPK': ['AI_VH1-69_Vk1-39',
-                                         'AI_VH3-23_Vk1-39',
-                                         'SH_VH3-23_Vk1-39'],
-                            },
-                    },
-                ],
-            }
-        
-        lib_score = {
-                'SH_VH3-23_Vk1-39': 0,
-                'AI_VH3-23_Vk3-20': 0,
-                'AI_VH3-23_Vk1-39': 0,
-                'AI_VH1-69_Vk3-20': 0,
-                'AI_VH1-69_Vk1-39': 0,
-                'PureLibra': 0,
-        }
+        lib_score = {lib: 0 for lib in lib_frames.keys()}
 
-        for elem in lib_patterns[self.mode]:
-            try:
-                pos = self._get_positions(elem['anchor'])[1]
-                frag = self.seqs[pos+elem['i_start']:pos+elem['i_stop']]
-                rec_lib = elem['patterns'].get(frag)
-                if rec_lib:
-                    for match in rec_lib:
-                        lib_score[match] += 1
-            except TypeError as e:
-                print(e)
+        for lib, frames in lib_frames.items():
+            for frame in frames:
+                if self.mode == 'aa':
+                    frame = str(Seq(frame).translate(table=supE_codon_table))
+                if frame in self.seq:
+                    lib_score[lib] += 1
 
         lib_sorted = sorted(list(lib_score.keys()),
                             key=lambda x: lib_score[x],
                             reverse=True)
-        top_lib, second_lib, *rest = lib_sorted
+        top_lib, second_lib, *_ = lib_sorted
 
         if lib_score[top_lib] > lib_score[second_lib]:
             return top_lib
-        else:
-            return 'Not recognized'
+        return 'Not recognized'
 
     def _get_quality(self) -> tuple:
         if self.phred:
@@ -396,13 +244,13 @@ class Binder:
         def _detect_mutations() -> list:
             if self.lib != 'Not recognized':
                 mutations = []
-                frames = lib_frame_dict[self.lib]
+                frames = lib_frames[self.lib]
                 
                 if self.mode == 'aa':
-                    frames = list(map(lambda x: str(Seq(x).translate()), frames))
+                    frames = list(map(lambda x: str(Seq(x).translate(table=supE_codon_table)), frames))
                 
                 for i, frame in enumerate(frames, 1):
-                    mutations.append(i if frame not in self.seqs else '')
+                    mutations.append(i if frame not in self.seq else '')
 
                 return mutations
             return ['-'] * 8
@@ -410,8 +258,8 @@ class Binder:
 
         def _count_stop_codons() -> list:
             if self.mode == 'nt':
-                codons = Counter([str(self.seqs[i:i+3])
-                                for i in range(0, len(self.seqs), 3)])
+                codons = Counter([str(self.seq[i:i+3])
+                                for i in range(0, len(self.seq), 3)])
                 amber = codons['TAG']
                 ochre = codons['TAA']
                 opal = codons['TGA']
@@ -419,17 +267,16 @@ class Binder:
             return ['-', '-', '-']
 
         # Sequence recognized
-        if self.seqs is not None:
+        if self.seq is not None:
 
-            # TODO move to class
             # Library detection and mutation search
             frame_muts = _detect_mutations()
 
             # TODO move to class
             if self.mode == 'nt':
-                seq_aa = str(self.seqs.translate())
+                seq_aa = str(self.seq.translate(table=supE_codon_table))
             else:
-                seq_aa = str(self.seqs)
+                seq_aa = str(self.seq)
 
             # Stop codon search
             stop_muts = _count_stop_codons()
@@ -443,9 +290,6 @@ class Binder:
                             stop_muts,
                             seq_aa)
 
-            # Create unique binder key
-            ub_key = self.get_ub_key()
-
         # No sequence recognized
         else:
             result = Result(
@@ -457,22 +301,64 @@ class Binder:
                 [''] * 3,  # Stop mutations
                 '-',  # Aminoacid sequence
             )
-            ub_key = ()
+        return result
 
-        return (result, ub_key)
 
-    def get_ub_key(self)-> tuple[str, str]:
-        if Seq('-') not in self.rfs:
-            return ('_'.join(map(str, self.rfs)), self.lib)
-        else:
-            return ()
+    def get_pI(self):
+
+        # Calculates charge of aa at given pH based on pKa
+        def charge(ph, pka):
+            return 1 / (10 ** (ph-pka)+1)
+
+        rfs_merged = ''.join(map(str, self.rfs)).upper()
+
+        aa_count = Counter(rfs_merged)
+
+        # Set range of pI search and start pH
+        pH_min, pH, pH_max = 2, 8, 14.0
+
+        base_pka = {'K': 10.00,
+                    'R': 12.00,
+                    'H':  5.98}
+        acid_pka = {'D':  4.05,
+                    'E':  4.45,
+                    'C':  9.00,
+                    'Y': 10.00}
+        n_term_dict = {'A': 7.59,
+                       'M': 7.00,
+                       'S': 6.93,
+                       'P': 8.36,
+                       'T': 6.82,
+                       'V': 7.44,
+                       'E': 7.70}
+        c_term_dict = {'D': 4.55,
+                       'E': 4.75}
+
+        n_pka = n_term_dict.get(rfs_merged[0], 7.7)
+        c_pka = c_term_dict.get(rfs_merged[-1], 3.55)
+
+        p_charge = sum([charge(pH, base_pka[aa]) * aa_count[aa] for aa in base_pka.keys()]) + charge(pH, n_pka)
+        n_charge = sum([charge(acid_pka[aa], pH) * aa_count[aa] for aa in acid_pka.keys()]) + charge(c_pka, pH)
+        net_charge = p_charge - n_charge
+
+        while abs(net_charge) > 0.001:
+            if net_charge > 0:
+                pH_min = pH
+            else:
+                pH_max = pH
+
+            pH = (pH_min + pH_max) / 2
+
+            p_charge = sum([charge(pH, base_pka[aa]) * aa_count[aa] for aa in base_pka.keys()]) + charge(pH, n_pka)
+            n_charge = sum([charge(acid_pka[aa], pH) * aa_count[aa] for aa in acid_pka.keys()]) + charge(c_pka, pH)
+            net_charge = p_charge - n_charge
+
+        return round(pH, 2)
 
     def check_unique(self, file) -> bool:
         # unique = True/False
         # return unique
         raise NotImplementedError
-
-        # [binder for binder in binder_list if binder.unique]
 
 
 class RF:
@@ -550,69 +436,6 @@ class SeqLiab:
     
     def __init__(self, rfs: list) -> None:
         
-        seq_liab_db = [
-            {'name': 'Glycosylation',
-             'regex': 'N[^P][ST][^P]',
-             'score': 3,
-            },
-            {'name': 'Isomerization',
-             'regex': 'D[GSTDH]',
-             'score': 3,
-            },
-            {'name': 'Fragmentation',
-             'regex': 'D[PQ]',
-             'score': 3,
-            },
-            {'name': 'Extra Cysteine',
-             'regex': 'C',
-             'score': 3,
-            },
-            {'name': 'Deamidation CDR (High)',
-             'regex': 'N[GSAT]',
-             'score': 2,
-            },
-            {'name': 'Hydrolysis',
-             'regex': 'NP',
-             'score': 2,
-            },
-            {'name': 'Cleavage',
-             'regex': 'TS',
-             'score': 2,
-            },
-            {'name': 'Deamidation CDR (Med)',
-             'regex': 'NH',
-             'score': 1,
-            },
-            {'name': 'Integrin binding aVb3',
-             'regex': 'RGD|RYD|KGD|NGR',
-             'score': 1,
-            },
-            {'name': 'Integrin binding a4b1',
-             'regex': 'LDV',
-             'score': 1,
-            },
-            {'name': 'Integrin binding a2b1',
-             'regex': 'DGE',
-             'score': 1,
-            },
-            {'name': 'CD11c/CD18 binding',
-             'regex': 'GPR',
-             'score': 1,
-            },
-            {'name': 'Hydrophobicity',
-             'regex': '[WF][WF]',
-             'score': 1,
-            },
-            {'name': 'Oxidation',
-             'regex': 'M',
-             'score': 0,
-            },
-            {'name': 'Deamidation CDR (Low)',
-             'regex': '[STK]N',
-             'score': 0,
-            },
-        ]
-        
         if isinstance(rfs, str):
             rfs = rfs.split('_')
 
@@ -620,15 +443,15 @@ class SeqLiab:
         self.sl_count = defaultdict(int)
         self.sl_matches = defaultdict(list)
 
-        for sliab in seq_liab_db:
-            sl_pattern = re.compile(sliab['regex'])
+        for sl in seq_liab_db:
+            sl_pattern = re.compile(sl['regex'])
             for i, rf in enumerate(rfs, 1):
                 sl_matches = sl_pattern.findall(rf)
                 if sl_matches:
-                    self.sl_score += sliab['score'] * len(sl_matches)
-                    self.sl_count[sliab['name']] += len(sl_matches)
+                    self.sl_score += sl['score'] * len(sl_matches)
+                    self.sl_count[sl['name']] += len(sl_matches)
                     for match in sl_matches:
-                        self.sl_matches[sliab['name']] += [(i, match)]
+                        self.sl_matches[sl['name']] += [(i, match)]
 
         # TODO return (i, sl_match) for every match
 
@@ -640,18 +463,4 @@ class SeqLiab:
 
 
 if __name__ == '__main__':
-    # rfs = ['GFTFSSY',
-    #        'ISGSGGST',
-    #        'RLMVNLCLFAL',
-    #        'QSVSSSY',
-    #        'GAS',
-    #        'VWVWQSYWT']
-
-    seq = "CGGGTGATACACGGCATGTCTAGGCAGAGGAGCACCGGCATGAAATACCTATTGCCTACGGCAGCCGCTGGATTGTTATTACTCGCGGCCCAGCCGGCCATGGCCGAGGTGCAGCTGTTGGAGTCTGGGGGAGGCTTGGTACAGCCTGGGGGGTCCCTGAGACTCTCCTGTGCAGCCTCTGGATTCACCTTTAGCAGCTATGCCATGAGCTGGGTCCGCCAGGCTCCAGGGAAGGGGCTGGAGTGGGTGTCAGCTATTAGTGGTAGTGATGGTAGCACATACTACGCAGACTCCGTGAAGGGCCGGTTCACCATCTCCAGAGACAATTCCAAGAACACGCTGTATCTGCAAATGAACAGCCTGAGAGCCGAGGACACGGCCGTATATTACTGTGCGAGGAAGTCCTAGTCCAACAGCATGGGGCTGTTCGACTATTGGGGCCAGGGAACCCTGGTCACCGTGTCCTCAGGTGGAGGCGGTTCAGGCGGAGGTGGCAGCGGCGGTGGCGGGTCGACGGAAATTGTGTTGACGCAGTCTCCAGGCACCCTGTCTTTGTCTCCAGGGGAAAGAGCCACCCTCTCCTGCAGGGGCAGTCAGAGTGTTAGCAGCAGCTACTTAGCCTGGTACCAGCAGAAACCTGGCCAGGCTCCCAGGCTCCTCATCTATGGTGCATCCAGCAGGGCCACTGGCATCCCAGACAGGTTCAGTGGCAGTGGGTCTGGGACAGACTTCACTCTCACCATCAGCAGACTGGAGCCTGAAGATTTTGCAGTGTATTACTGTCTGTTCTCGTACCTGTAGTTGGAGACCTTTGGCCAGGGGACCAAGCTGGAGATCAAACGAGCGGCCGCAGGGGCCGCAGAACAAAAACTCATCTCAGAAGAGGATCTGGGAGACGCGGGTGGCGGCGGTTCTACTGTTGAAAGTTGTTTAGCAAAACCTCATACAGAAAATTCATTTACTAACGTCTGGAAAGACGACAAAACTTTAGATCGTTACGCTAACTATGAGGGCTGTCTGTGGAATGCTACAGGCGTTGTGGTTTGTACTGGTGACGAAACTCAGTGTTACGGTACATGGGTTCCTATTGGGCTTGCTATCCCTGAAAATGAAGGTGGTGGCTCTGAAGGTGGCGGTTCTGAGGGTGGCGGTTCTGAAGGTGGCGGTACTAAACCTCCTGAGTACGGGGAATCACCTATTCCGGGCTATACTTATTCAACCCTTTCAACGGCCTTATCGCCTGGAACTGAGCAAAACCCGCTAATCTAATCTTTCTTTGGGA"
-    binder = Binder.seqs(seq)
-    
-    res, key = binder.analyze_binder()
-    
-    # print(binder.sl_summary)
-    
-
+    pass
