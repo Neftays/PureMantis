@@ -24,6 +24,18 @@ TO OD
 """
 
 
+class bcolors:
+    BMAGENTA = '\033[95m'
+    BBLUE = '\033[94m'
+    CYAN = '\033[96m'
+    BGREEN = '\033[92m'
+    BYELLOW = '\033[93m'
+    BRED = '\033[91m'
+    ENDC = '\033[0m'
+    BOLD = '\033[1m'
+    UNDERLINE = '\033[4m'
+
+
 class UniqueBinder(NamedTuple):
     rfs: str
     lib: str
@@ -34,7 +46,7 @@ class UniqueBinder(NamedTuple):
 def print_frame(func):
     def wrapper(*args, **kwargs):
         system('cls')
-        print('/ PureMantis \\'.center(80, '_'))
+        print(f'/ {bcolors.BBLUE}PureMantis{bcolors.ENDC} \\'.center(80, '_'))
         func(*args, **kwargs)
         print(''.center(80, '‾'))
     return wrapper
@@ -95,7 +107,7 @@ def get_files(mypath: str, format: list, subdir: str = None, abspath: bool = Tru
                 and f.rpartition('.')[-1].lower() in format]
         return files
     except FileNotFoundError:
-        print(f'---< {subdir} folder not found >---'.center(80))
+        print(f'---< {bcolors.BRED}{subdir} folder not found{bcolors.ENDC} >---'.center(80))
         return []
 
 
@@ -116,7 +128,7 @@ def sort_scf_files(unique_binders: list, path: str, file_dir: str) -> None:
             makedirs(f'{file_dir}\\Not classified', exist_ok=True)
             system(f'move ".\\scf_files\\{file}" "{file_dir}\\Not classified\\" >nul')
     else:
-        print("---< No scf files detected >---".center(80))
+        print(f'---< {bcolors.BRED}No scf files detected{bcolors.ENDC} >---'.center(80))
 
 
 def load_template():
@@ -329,7 +341,7 @@ def save_workbook(wb: Workbook, file_path: str) -> None:
             wb.save(filename=file_path)
             break
         except PermissionError:
-            print('---< Unable to save: file in use - close it and try again >---'.center(80))
+            print(f'---< {bcolors.BRED}Unable to save: file in use - close it and try again{bcolors.ENDC} >---'.center(80))
             system('pause')
 
 

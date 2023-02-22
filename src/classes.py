@@ -31,7 +31,7 @@ class Binder:
             self.mm_lmt = 7
         elif self.mode == 'aa':
             self.mm_lmt = 1
-        self.hq_lmt = 40  #
+        self.hq_lmt = 40
 
         if isinstance(seq_rec._seq, str):
             seq_rec._seq = Seq(seq_rec._seq)
@@ -47,11 +47,12 @@ class Binder:
             seq_rec = seq_rec[::-1]  # Reverse to change phred if present
             seq_rec._seq = seq_rec._seq.complement()
             seq_extract = self._extract_seq(seq_rec)
-        
+
         # Sequence recognized and extracted
-        if seq_extract is not None:  
+        if seq_extract is not None:
             self.seq = seq_extract._seq
-            self.phred = seq_extract._per_letter_annotations.get('phred_quality', [])         
+            self.phred = (seq_extract._per_letter_annotations
+                          .get('phred_quality', []))
         else:
             self.seq = Seq('-')
             self.phred = []
@@ -79,18 +80,20 @@ class Binder:
     def _load_rfs(self) -> dict:
 
         def _translate_to_aa(rf_dict):
-            for rf, params in rf_dict.items():
+            rf_dict_translated = rf_dict.copy()
+            for rf, params in rf_dict_translated.items():
                 for key, value in params.items():
                     if isinstance(value, str):
-                        rf_dict[rf][key] = str(Seq(value).translate(table=supE_codon_table))
+                        rf_dict_translated[rf][key] = str(Seq(value)
+                                               .translate(table=supE_codon_table))
                     elif isinstance(value, int):
-                        rf_dict[rf][key] = value // 3
-            return rf_dict
-        
+                        rf_dict_translated[rf][key] = value // 3
+            return rf_dict_translated
+
         file_dir = path.dirname(path.abspath(__file__))
         file_name = 'randomized_fragments.json'
         file_path = path.join(file_dir, file_name)
-        
+
         with open(file_path, 'r') as file:
             rf_dicts = load(file)
 
@@ -110,15 +113,15 @@ class Binder:
         # seq = seq_cleanup(seq)
 
         # TODO Extend tag lists/objects and create algorithm
-        pelB = Seq('GCGGCCCAGCCGGCCATGGCG')
-        his_tag = Seq('GGCCCGGGAGGCCAACACCATCACCACCATCAT')
-        myc_tag = Seq('GAACAAAAACTCATCTCAGAAGAGGATCTG')
+        pelB = Seq('GCGGCCCAGCCGGCCATGGCG')  # AAQPAMA
+        his_tag = Seq('GGCCCGGGAGGCCAACACCATCACCACCATCAT')  # GPGGQHHHHHH
+        myc_tag = Seq('GAACAAAAACTCATCTCAGAAGAGGATCTG')  # EQKLISEEDL
 
         if self.mode == 'aa':
             pelB = pelB.translate(table=supE_codon_table)
             his_tag = his_tag.translate(table=supE_codon_table)
             myc_tag = myc_tag.translate(table=supE_codon_table)
-
+ 
         # Get positions of start and end regions
         pelB_i = self._get_positions(pelB, seq_rec._seq)[1]
         his_tag_i = self._get_positions(his_tag, seq_rec._seq)[0]
@@ -140,7 +143,7 @@ class Binder:
             return None
 
     def _get_positions(self, target, seq=None) -> tuple:
-        
+
         if seq is None:
             seq = self.seq
 
@@ -163,7 +166,8 @@ class Binder:
         try:
             alignments = aligner.align(str(seq), target)
             target_alignment = str(alignments[0]).split()
-            aligned_i = alignments.alignment.aligned[0][0]
+            # print(alignments._alignment)
+            aligned_i = alignments._alignment.aligned[0][0]
 
             mm_condition = target_alignment.count('.') <= self.mm_lmt
             len_condition = len(range(*aligned_i)) == len(target)
@@ -174,11 +178,10 @@ class Binder:
             if len_condition and mm_condition:
                 return aligned_i
             return (-1, -1)
-        except AttributeError:
-            return (-1, -1)
+        # except AttributeError:
+        #     return (-1, -1)
         except IndexError:
             return (-1, -1)
-
 
     def _extract_rfs(self) -> list[Seq]:
         self.lib = self._lib_recognition()
@@ -206,10 +209,9 @@ class Binder:
                     rf_extracted.append(Seq('-'))
 
             return rf_extracted
-            
+
         else:
             return [Seq('-')] * len(self.rf_dict.values())
-
 
     def _lib_recognition(self) -> str:
 
@@ -233,7 +235,8 @@ class Binder:
 
     def _get_quality(self) -> tuple:
         if self.phred:
-            phred_hq = round(sum(x > self.hq_lmt for x in self.phred) / len(self.phred), 3)
+            phred_hq = round(
+                sum(x > self.hq_lmt for x in self.phred) / len(self.phred), 3)
             phred_min = min(self.phred)
             phred_min_i = self.phred.index(phred_min) + 1
             return (phred_hq, phred_min, f'({phred_min_i})')
@@ -245,21 +248,20 @@ class Binder:
             if self.lib != 'Not recognized':
                 mutations = []
                 frames = lib_frames[self.lib]
-                
+
                 if self.mode == 'aa':
                     frames = list(map(lambda x: str(Seq(x).translate(table=supE_codon_table)), frames))
-                
+
                 for i, frame in enumerate(frames, 1):
                     mutations.append(i if frame not in self.seq else '')
 
                 return mutations
             return ['-'] * 8
 
-
         def _count_stop_codons() -> list:
             if self.mode == 'nt':
                 codons = Counter([str(self.seq[i:i+3])
-                                for i in range(0, len(self.seq), 3)])
+                                  for i in range(0, len(self.seq), 3)])
                 amber = codons['TAG']
                 ochre = codons['TAA']
                 opal = codons['TGA']
@@ -303,7 +305,6 @@ class Binder:
             )
         return result
 
-
     def get_pI(self):
 
         # Calculates charge of aa at given pH based on pKa
@@ -337,8 +338,10 @@ class Binder:
         n_pka = n_term_dict.get(rfs_merged[0], 7.7)
         c_pka = c_term_dict.get(rfs_merged[-1], 3.55)
 
-        p_charge = sum([charge(pH, base_pka[aa]) * aa_count[aa] for aa in base_pka.keys()]) + charge(pH, n_pka)
-        n_charge = sum([charge(acid_pka[aa], pH) * aa_count[aa] for aa in acid_pka.keys()]) + charge(c_pka, pH)
+        p_charge = sum([charge(pH, base_pka[aa]) * aa_count[aa]
+                        for aa in base_pka.keys()]) + charge(pH, n_pka)
+        n_charge = sum([charge(acid_pka[aa], pH) * aa_count[aa]
+                        for aa in acid_pka.keys()]) + charge(c_pka, pH)
         net_charge = p_charge - n_charge
 
         while abs(net_charge) > 0.001:
@@ -349,8 +352,10 @@ class Binder:
 
             pH = (pH_min + pH_max) / 2
 
-            p_charge = sum([charge(pH, base_pka[aa]) * aa_count[aa] for aa in base_pka.keys()]) + charge(pH, n_pka)
-            n_charge = sum([charge(acid_pka[aa], pH) * aa_count[aa] for aa in acid_pka.keys()]) + charge(c_pka, pH)
+            p_charge = sum([charge(pH, base_pka[aa]) * aa_count[aa]
+                            for aa in base_pka.keys()]) + charge(pH, n_pka)
+            n_charge = sum([charge(acid_pka[aa], pH) * aa_count[aa]
+                            for aa in acid_pka.keys()]) + charge(c_pka, pH)
             net_charge = p_charge - n_charge
 
         return round(pH, 2)
@@ -363,7 +368,7 @@ class Binder:
 
 class RF:
     def __init__(self, params: dict, mode) -> None:
-    
+
         self.mode = mode
         self.start = params['start']
         self.st_dis = params['start_dis']
@@ -390,7 +395,8 @@ class RF:
         try:
             alignments = aligner.align(str(seq), target)
             target_alignment = str(alignments[0]).split()[1]
-            aligned_i = alignments.alignment.aligned[0][0]
+
+            aligned_i = alignments._alignment.aligned[0][0]
 
             mm_condition = target_alignment.count('.') <= self.mm_lmt
             len_condition = len(range(*aligned_i)) == len(target)
@@ -398,7 +404,7 @@ class RF:
             if len_condition and mm_condition:
                 return aligned_i
             return (-1, -1)
-        
+
         except AttributeError:
             return (-1, -1)
         except IndexError:
@@ -406,7 +412,7 @@ class RF:
 
     # Extract RF sequence
     def extract(self, seq) -> tuple:
-        
+
         def _check_positions() -> bool:
             conditions = [
                 self.st_pos >= 0,
@@ -416,10 +422,10 @@ class RF:
             ]
             # print(conditions)
             return all(conditions)
-        
+
         self.st_pos = self._get_positions(self.start, seq)[1]
         self.end_pos = self._get_positions(self.end, seq)[0]
-        
+
         self.rf_start = self.st_pos + self.st_dis
         self.rf_end = self.end_pos - self.end_dis
 
@@ -433,9 +439,9 @@ class RF:
 
 
 class SeqLiab:
-    
+
     def __init__(self, rfs: list) -> None:
-        
+
         if isinstance(rfs, str):
             rfs = rfs.split('_')
 
@@ -459,7 +465,7 @@ class SeqLiab:
         return self.sl_score
 
     def get_summary(self):
-        return [(liab, self.sl_count[liab], self.sl_matches[liab]) for liab in self.sl_count]
+        return [(liab, self.sl_count[liab], self.sl_matches[liab])for liab in self.sl_count]
 
 
 if __name__ == '__main__':
